@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import TeamBadge from '../components/TeamBadge'
-import { niceError, supabase, type Match, type TeamCode } from '../supabase'
+import { niceError, supabase, type Match, type SyncStatus, type TeamCode } from '../supabase'
 import { TEAMS, TEAM_CODES, formatDate, formatTime } from '../teams'
 
 /** Date ISO -> valeur pour <input type="datetime-local"> en heure locale */
@@ -33,10 +33,18 @@ function ScoreRow({ match, onChanged }: { match: Match; onChanged: () => void })
   )
 
   async function saveScore() {
-    const update = Object.fromEntries(
+    const update: Record<string, number | string | null> = Object.fromEntries(
       RESULT_FIELDS.map((f) => [f, form[f] === '' ? null : Number(form[f])]),
     )
+    // Saisie manuelle = prioritaire sur la synchro ; tout vider = la synchro reprend la main.
+    update.result_source = RESULT_FIELDS.every((f) => form[f] === '') ? null : 'manual'
     const { error } = await supabase.from('matches').update(update).eq('id', match.id)
+    setError(error ? niceError(error) : null)
+    if (!error) onChanged()
+  }
+
+  async function backToAuto() {
+    const { error } = await supabase.from('matches').update({ result_source: null }).eq('id', match.id)
     setError(error ? niceError(error) : null)
     if (!error) onChanged()
   }
@@ -94,6 +102,17 @@ function ScoreRow({ match, onChanged }: { match: Match; onChanged: () => void })
         {field('home_yellows', `Cartons jaunes ${home}`)}
         {field('away_yellows', `Cartons jaunes ${away}`)}
       </div>
+      <div className="admin-source">
+        {match.result_source === 'auto' && <span className="pill open">Auto · ESPN</span>}
+        {match.result_source === 'manual' && (
+          <>
+            <span className="pill warn">Saisi à la main</span>
+            <button className="link small" onClick={backToAuto} title="La prochaine synchro remplacera ce résultat par celui d'ESPN">
+              Repasser en automatique
+            </button>
+          </>
+        )}
+      </div>
       <button className="btn primary admin-save" disabled={!changed || !scoreOk} onClick={saveScore}>
         {changed ? 'Valider le résultat' : match.home_score !== null ? 'Résultat saisi ✓' : 'Valider le résultat'}
       </button>
@@ -108,14 +127,27 @@ export default function AdminPage() {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [form, setForm] = useState({ round: '1', kickoff: '', home: 'FRA' as TeamCode, away: 'ENG' as TeamCode, venue: '' })
 
+  const [sync, setSync] = useState<SyncStatus | null>(null)
+  const [syncing, setSyncing] = useState(false)
+
   const load = useCallback(async () => {
-    const [m, r] = await Promise.all([
+    const [m, r, s] = await Promise.all([
       supabase.from('matches').select('*').order('kickoff'),
       supabase.from('tournament_results').select('winner, wooden_spoon').maybeSingle(),
+      supabase.from('sync_status').select('last_run_at, last_updated, last_message').maybeSingle(),
     ])
     setMatches(m.data ?? [])
     if (r.data) setResult({ winner: r.data.winner ?? '', wooden_spoon: r.data.wooden_spoon ?? '' })
+    setSync(s.data)
   }, [])
+
+  async function syncNow() {
+    setSyncing(true)
+    const { error } = await supabase.functions.invoke('sync-results')
+    setSyncing(false)
+    if (error) setMsg({ ok: false, text: `Synchro impossible : ${error.message}. La fonction sync-results est-elle déployée ?` })
+    await load()
+  }
 
   useEffect(() => {
     load()
@@ -145,6 +177,22 @@ export default function AdminPage() {
   return (
     <div className="page">
       <div className="card">
+        <h2>Synchro automatique</h2>
+        <p className="muted small">
+          Les résultats (score, essais, cartons) sont récupérés sur ESPN toutes les 15 minutes, environ 1h40 après le
+          coup d’envoi. Un résultat saisi à la main n’est jamais écrasé.
+        </p>
+        <p className="small">
+          {sync?.last_run_at
+            ? <>Dernière synchro : <strong>{formatDate(sync.last_run_at)} à {formatTime(sync.last_run_at)}</strong>{sync.last_message ? ` — ${sync.last_message}` : ''}</>
+            : 'Aucune synchro pour l’instant.'}
+        </p>
+        <button className="btn" onClick={syncNow} disabled={syncing}>
+          {syncing ? 'Synchro en cours…' : '↻ Synchroniser maintenant'}
+        </button>
+      </div>
+
+      <div className="card">
         <h2>Scores des matchs</h2>
         <p className="muted small">
           Saisis le score final, le nombre d’essais et de cartons jaunes : les points sont calculés immédiatement.
@@ -152,7 +200,7 @@ export default function AdminPage() {
         {matches.length === 0 && <p className="muted">Aucun match. Ajoute-les ci-dessous ou importe le calendrier (voir README).</p>}
         {matches.map((m) => (
           <ScoreRow
-            key={[m.id, m.kickoff, m.home_score, m.away_score, m.home_tries, m.away_tries, m.home_yellows, m.away_yellows].join('-')}
+            key={[m.id, m.kickoff, m.home_score, m.away_score, m.home_tries, m.away_tries, m.home_yellows, m.away_yellows, m.result_source].join('-')}
             match={m}
             onChanged={load}
           />

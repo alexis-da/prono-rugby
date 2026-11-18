@@ -28,6 +28,14 @@ export interface Match {
   away_tries: number | null
   home_yellows: number | null
   away_yellows: number | null
+  result_source: 'auto' | 'manual' | null
+  espn_event_id: string | null
+}
+
+export interface SyncStatus {
+  last_run_at: string | null
+  last_updated: number | null
+  last_message: string | null
 }
 
 export interface PredictionPoints {

@@ -7,7 +7,8 @@ Jeu de pronostics entre potes pour le Tournoi des 6 Nations, dans l'esprit de «
 - Un **booster ×2** à placer sur un seul match de tout le Tournoi.
 - Des **pronos bonus** : vainqueur du Tournoi et cuillère de bois.
 - Un classement général et un classement par journée.
-- Une page **Admin** pour saisir les scores, les essais et les cartons. Les points sont calculés automatiquement.
+- **Les résultats arrivent tout seuls** : score, essais et cartons sont récupérés sur ESPN toutes les 15 minutes. L'admin peut toujours corriger à la main, et sa saisie est prioritaire.
+- Une page **Admin** pour saisir ou corriger les résultats. Les points sont calculés automatiquement.
 - L'inscription demande un **code d'invitation**.
 - Pensée pour le téléphone, avec un mode sombre automatique.
 
@@ -37,10 +38,12 @@ Pour modifier le barème, change la fonction `match_points` dans `supabase/schem
 ```
 supabase/schema.sql     tables, règles de sécurité, calcul des points
 supabase/seed_2027.sql  calendrier du Tournoi 2027 (15 matchs)
+supabase/functions/sync-results/index.ts
+                        récupération automatique des résultats (ESPN)
 src/                    l'application
 ```
 
-## Mise en ligne (environ 15 minutes, gratuit)
+## Mise en ligne (environ 20 minutes, gratuit)
 
 ### 1. Supabase
 
@@ -65,7 +68,29 @@ src/                    l'application
 3. Clique sur **Deploy**. Tu obtiens une adresse du type `prono-rugby-xxx.vercel.app`.
 4. Retourne dans Supabase, **Authentication > URL Configuration**, et mets cette adresse dans **Site URL**. Ça sert au lien « Mot de passe oublié ».
 
-### 3. Lancer la ligue
+### 3. Résultats automatiques (5 minutes)
+
+La fonction `sync-results` interroge l'API publique d'ESPN (gratuite, sans clé). Pour chaque match terminé depuis moins de 3 jours, elle récupère le score, les essais et les cartons jaunes, puis les écrit en base. Elle ne touche jamais un résultat que l'admin a saisi à la main.
+
+1. Dans Supabase, va dans **Edge Functions > Deploy a new function > Via Editor**.
+2. Nomme-la exactement `sync-results`, remplace le code d'exemple par le contenu de `supabase/functions/sync-results/index.ts`, puis clique sur **Deploy**.
+3. Dans les réglages de la fonction (**Details**), désactive **Verify JWT** (« Enforce JWT verification »). La fonction ne fait que lire des résultats publics, et elle refuse de tourner plus d'une fois par minute.
+4. Programme-la toutes les 15 minutes : **Integrations > Cron**. Active l'intégration si besoin, puis **Create job** :
+   - Nom : `sync-results`
+   - Planning : `*/15 * * * *`
+   - Type : **Supabase Edge Function**, fonction `sync-results`, méthode `POST`
+
+   Si ton tableau de bord ne propose pas ce type, tu peux faire la même chose en SQL (**SQL Editor**). Il faut d'abord activer les extensions `pg_cron` et `pg_net` dans **Database > Extensions**, et remplacer `TON-PROJET` :
+   ```sql
+   select cron.schedule('sync-results', '*/15 * * * *', $$
+     select net.http_post(url := 'https://TON-PROJET.supabase.co/functions/v1/sync-results')
+   $$);
+   ```
+5. Pour vérifier, ouvre l'onglet **Admin** de l'appli et clique sur **Synchroniser maintenant**. La ligne « Dernière synchro » doit se mettre à jour. Hors période de match, elle affiche « Aucun match à synchroniser ».
+
+> Les données viennent d'une API ESPN **non officielle** : elle peut changer sans prévenir. Si un résultat manque ou paraît faux, l'admin le saisit à la main dans l'onglet **Admin** : il passe alors en « Saisi à la main » et n'est plus jamais écrasé. Le bouton « Repasser en automatique » rend la main à la synchro.
+
+### 4. Lancer la ligue
 
 1. Ouvre l'appli, crée ton compte et rejoins la ligue avec ton code.
 2. Passe-toi admin dans **SQL Editor** :
@@ -76,7 +101,8 @@ src/                    l'application
 
 ### Pendant le Tournoi
 
-- Après chaque match, va dans l'onglet **Admin** et saisis le score final, le nombre d'essais et le nombre de cartons jaunes de chaque équipe. Le classement se met à jour immédiatement.
+- Les résultats arrivent tout seuls environ 1h40 après le coup d'envoi. Le classement se met alors à jour.
+- Si un résultat manque, va dans l'onglet **Admin** pour le saisir à la main (score, essais et cartons jaunes de chaque équipe), ou clique sur **Synchroniser maintenant**.
 - À la fin, saisis le vainqueur et la cuillère de bois dans **Admin** pour attribuer les points bonus.
 - Si un horaire change, utilise le bouton **Horaire** de l'admin.
 

@@ -14,6 +14,7 @@ drop table if exists public.matches cascade;
 drop table if exists public.tournament_results cascade;
 drop table if exists public.league_secret cascade;
 drop table if exists public.profiles cascade;
+drop table if exists public.sync_status cascade;
 drop function if exists public.is_admin();
 drop function if exists public.join_league(text, text);
 drop function if exists public.match_score(int, int, int, int);
@@ -92,6 +93,10 @@ create table public.matches (
   away_tries  int check (away_tries between 0 and 30),
   home_yellows int check (home_yellows between 0 and 15),
   away_yellows int check (away_yellows between 0 and 15),
+  -- Origine du résultat : 'auto' (synchro ESPN) ou 'manual' (saisi par l'admin,
+  -- jamais écrasé par la synchro). NULL = pas encore de résultat.
+  result_source text check (result_source in ('auto', 'manual')),
+  espn_event_id text,
   check ((home_score is null) = (away_score is null))
 );
 create index on public.matches (kickoff);
@@ -128,6 +133,15 @@ create table public.tournament_results (
   wooden_spoon public.team
 );
 insert into public.tournament_results default values;
+
+-- État de la synchro automatique des résultats (fonction sync-results).
+create table public.sync_status (
+  id            int primary key default 1 check (id = 1),
+  last_run_at   timestamptz,
+  last_updated  int,
+  last_message  text
+);
+insert into public.sync_status default values;
 
 -- ---------------------------------------------------------------------
 --  Fonctions utilitaires
@@ -185,6 +199,7 @@ alter table public.predictions        enable row level security;
 alter table public.boosters           enable row level security;
 alter table public.bonus_predictions  enable row level security;
 alter table public.tournament_results enable row level security;
+alter table public.sync_status        enable row level security;
 
 -- Profils : tout le monde voit les pseudos ; on ne peut modifier que son pseudo.
 create policy "profils visibles" on public.profiles
@@ -273,6 +288,10 @@ create policy "résultat visible" on public.tournament_results
   for select to authenticated using (true);
 create policy "admin saisit le résultat" on public.tournament_results
   for update to authenticated using (public.is_admin()) with check (public.is_admin());
+
+-- Synchro : lecture pour tous ; seule la fonction sync-results (clé service) écrit.
+create policy "état synchro visible" on public.sync_status
+  for select to authenticated using (true);
 
 -- ---------------------------------------------------------------------
 --  Vues de calcul des points (respectent les règles ci-dessus)

@@ -252,6 +252,8 @@ input:focus, select:focus { outline: 2px solid var(--brand); outline-offset: 1px
 .admin-grid > span:not(.team-badge) { justify-self: start; font-size: 0.85rem; color: var(--muted); }
 .admin-grid input { text-align: center; font-weight: 700; padding: 0.35rem 0.2rem; min-height: 40px; }
 .admin-save { width: 100%; margin-top: 0.5rem; }
+.admin-source { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; min-height: 1rem; }
+.admin-source:empty { display: none; }
 .inline-form { display: flex; gap: 0.5rem; margin-top: 0.4rem; }
 
 /* ---------- Misc ---------- */
