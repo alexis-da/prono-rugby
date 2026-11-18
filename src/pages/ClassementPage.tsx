@@ -42,7 +42,7 @@ export default function ClassementPage({ profile }: { profile: Profile }) {
           user_id: g.user_id,
           pseudo: g.pseudo,
           total: mine.reduce((s, p) => s + (p.points ?? 0), 0),
-          good: mine.filter((p) => (p.points ?? 0) > 0).length,
+          good: mine.filter((p) => p.good).length,
           exact: mine.filter((p) => p.exact).length,
         }
       })

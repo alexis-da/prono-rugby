@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Match, PredictionPoints } from '../supabase'
+import type { Match, PredictionInput, PredictionPoints } from '../supabase'
 import { TEAMS, formatTime, timeLeft } from '../teams'
 import TeamBadge from './TeamBadge'
 
@@ -8,37 +8,57 @@ interface Props {
   now: number
   mine?: PredictionPoints
   boosted: boolean
-  /** null = booster disponible ; sinon raison pour laquelle on ne peut pas le poser ici */
+  /** null = booster utilisable ici ; sinon raison pour laquelle on ne peut pas le poser */
   boostBlocked: string | null
   others: (PredictionPoints & { pseudo: string })[]
-  onSave: (home: number, away: number) => Promise<string | null>
+  onSave: (p: PredictionInput) => Promise<string | null>
   onToggleBoost: () => Promise<string | null>
 }
 
-function scoreInput(v: string) {
-  return v.replace(/[^0-9]/g, '').slice(0, 3)
-}
+const FIELDS = ['home_score', 'away_score', 'home_tries', 'away_tries', 'home_yellows', 'away_yellows'] as const
+type Field = (typeof FIELDS)[number]
+type Form = Record<Field, string>
+
+const toForm = (p?: PredictionPoints): Form =>
+  Object.fromEntries(FIELDS.map((f) => [f, p?.[f] == null ? '' : String(p[f])])) as Form
+
+const digits = (v: string, max: number) => v.replace(/[^0-9]/g, '').slice(0, max)
+
+const pair = (a: number | null | undefined, b: number | null | undefined) =>
+  a == null || b == null ? '–' : `${a} – ${b}`
 
 export default function MatchCard({ match, now, mine, boosted, boostBlocked, others, onSave, onToggleBoost }: Props) {
   const started = new Date(match.kickoff).getTime() <= now
   const finished = match.home_score !== null
-  const [home, setHome] = useState(mine ? String(mine.home_score) : '')
-  const [away, setAway] = useState(mine ? String(mine.away_score) : '')
+  const [form, setForm] = useState<Form>(() => toForm(mine))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showOthers, setShowOthers] = useState(false)
 
+  const saved = toForm(mine)
+  const savedKey = JSON.stringify(saved)
   useEffect(() => {
-    setHome(mine ? String(mine.home_score) : '')
-    setAway(mine ? String(mine.away_score) : '')
-  }, [mine?.home_score, mine?.away_score])
+    setForm(JSON.parse(savedKey))
+  }, [savedKey])
 
-  const dirty = home !== (mine ? String(mine.home_score) : '') || away !== (mine ? String(mine.away_score) : '')
-  const valid = home !== '' && away !== ''
+  const dirty = FIELDS.some((f) => form[f] !== saved[f])
+  const valid = form.home_score !== '' && form.away_score !== ''
+  const set = (f: Field, max: number) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setForm({ ...form, [f]: digits(e.target.value, max) })
+  const num = (v: string) => (v === '' ? null : Number(v))
 
   async function save() {
     setBusy(true)
-    setError(await onSave(Number(home), Number(away)))
+    setError(
+      await onSave({
+        home_score: Number(form.home_score),
+        away_score: Number(form.away_score),
+        home_tries: num(form.home_tries),
+        away_tries: num(form.away_tries),
+        home_yellows: num(form.home_yellows),
+        away_yellows: num(form.away_yellows),
+      }),
+    )
     setBusy(false)
   }
   async function toggleBoost() {
@@ -47,7 +67,8 @@ export default function MatchCard({ match, now, mine, boosted, boostBlocked, oth
     setBusy(false)
   }
 
-  const left = timeLeft(match.kickoff, now)
+  const home = TEAMS[match.home].name
+  const away = TEAMS[match.away].name
 
   return (
     <article className={`match-card${boosted ? ' boosted' : ''}`}>
@@ -58,51 +79,46 @@ export default function MatchCard({ match, now, mine, boosted, boostBlocked, oth
         ) : started ? (
           <span className="pill live">En cours</span>
         ) : (
-          <span className="pill open">Ferme dans {left}</span>
+          <span className="pill open">Ferme dans {timeLeft(match.kickoff, now)}</span>
         )}
       </div>
 
       <div className="match-row">
         <div className="team">
           <TeamBadge team={match.home} />
-          <span className="team-name">{TEAMS[match.home].name}</span>
+          <span className="team-name">{home}</span>
         </div>
-
         <div className="score-zone">
           {started ? (
             finished ? (
-              <div className="final-score">
-                {match.home_score} <span>–</span> {match.away_score}
-              </div>
+              <div className="final-score">{match.home_score} <span>–</span> {match.away_score}</div>
             ) : (
               <div className="final-score pending">vs</div>
             )
           ) : (
             <div className="inputs">
-              <input
-                inputMode="numeric"
-                aria-label={`Score ${TEAMS[match.home].name}`}
-                value={home}
-                onChange={(e) => setHome(scoreInput(e.target.value))}
-                placeholder="–"
-              />
+              <input inputMode="numeric" aria-label={`Score ${home}`} value={form.home_score} onChange={set('home_score', 3)} placeholder="–" />
               <span>–</span>
-              <input
-                inputMode="numeric"
-                aria-label={`Score ${TEAMS[match.away].name}`}
-                value={away}
-                onChange={(e) => setAway(scoreInput(e.target.value))}
-                placeholder="–"
-              />
+              <input inputMode="numeric" aria-label={`Score ${away}`} value={form.away_score} onChange={set('away_score', 3)} placeholder="–" />
             </div>
           )}
         </div>
-
         <div className="team right">
           <TeamBadge team={match.away} />
-          <span className="team-name">{TEAMS[match.away].name}</span>
+          <span className="team-name">{away}</span>
         </div>
       </div>
+
+      {!started && (
+        <div className="extras">
+          <input inputMode="numeric" aria-label={`Essais ${home}`} value={form.home_tries} onChange={set('home_tries', 2)} placeholder="–" />
+          <span className="extras-label">Essais</span>
+          <input inputMode="numeric" aria-label={`Essais ${away}`} value={form.away_tries} onChange={set('away_tries', 2)} placeholder="–" />
+          <input inputMode="numeric" aria-label={`Cartons jaunes ${home}`} value={form.home_yellows} onChange={set('home_yellows', 2)} placeholder="–" />
+          <span className="extras-label"><span className="yellow-card" aria-hidden /> Cartons jaunes</span>
+          <input inputMode="numeric" aria-label={`Cartons jaunes ${away}`} value={form.away_yellows} onChange={set('away_yellows', 2)} placeholder="–" />
+        </div>
+      )}
 
       {!started && (
         <div className="match-actions">
@@ -110,7 +126,7 @@ export default function MatchCard({ match, now, mine, boosted, boostBlocked, oth
             className={`btn boost${boosted ? ' on' : ''}`}
             onClick={toggleBoost}
             disabled={busy || (!boosted && boostBlocked !== null)}
-            title={boostBlocked ?? 'Double les points de ce match'}
+            title={boostBlocked ?? 'Double tous les points de ce match'}
           >
             ⚡ {boosted ? 'Boosté ×2' : 'Booster'}
           </button>
@@ -121,12 +137,29 @@ export default function MatchCard({ match, now, mine, boosted, boostBlocked, oth
       )}
 
       {started && (
-        <div className="my-result">
-          <span>
-            Mon prono :{' '}
-            {mine ? <strong>{mine.home_score} – {mine.away_score}</strong> : <em>aucun</em>}
-            {boosted && ' ⚡'}
-          </span>
+        <div className="recap">
+          <table>
+            <thead>
+              <tr><th /><th>Mon prono{boosted ? ' ⚡' : ''}</th>{finished && <th>Réel</th>}</tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Score</td>
+                <td>{mine ? pair(mine.home_score, mine.away_score) : <em>aucun</em>}</td>
+                {finished && <td>{pair(match.home_score, match.away_score)}</td>}
+              </tr>
+              <tr>
+                <td>Essais</td>
+                <td>{pair(mine?.home_tries, mine?.away_tries)}</td>
+                {finished && <td>{pair(match.home_tries, match.away_tries)}</td>}
+              </tr>
+              <tr>
+                <td>Cartons jaunes</td>
+                <td>{pair(mine?.home_yellows, mine?.away_yellows)}</td>
+                {finished && <td>{pair(match.home_yellows, match.away_yellows)}</td>}
+              </tr>
+            </tbody>
+          </table>
           {mine?.points != null && (
             <span className={`points${mine.points > 0 ? ' plus' : ''}`}>
               {mine.points > 0 ? `+${mine.points}` : '0'} pt{mine.points > 1 ? 's' : ''}
@@ -150,7 +183,10 @@ export default function MatchCard({ match, now, mine, boosted, boostBlocked, oth
                 .map((o) => (
                   <li key={o.user_id}>
                     <span>{o.pseudo}{o.boosted ? ' ⚡' : ''}</span>
-                    <span>{o.home_score} – {o.away_score}</span>
+                    <span className="other-pick">
+                      <strong>{pair(o.home_score, o.away_score)}</strong>
+                      <small>Essais {pair(o.home_tries, o.away_tries)} · 🟨 {pair(o.home_yellows, o.away_yellows)}</small>
+                    </span>
                     <span className="pts">{o.points != null ? `${o.points} pts` : ''}</span>
                   </li>
                 ))}

@@ -17,27 +17,44 @@ drop table if exists public.profiles cascade;
 drop function if exists public.is_admin();
 drop function if exists public.join_league(text, text);
 drop function if exists public.match_score(int, int, int, int);
+drop function if exists public.match_points(int, int, int, int, int, int, int, int, int, int, int, int);
 drop function if exists public.bonus_lock_at();
 drop function if exists public.touch_updated_at() cascade;
 drop domain if exists public.team cascade;
 
 -- ---------------------------------------------------------------------
 --  Barème (modifiable ici)
---    Bon vainqueur (ou match nul)         : 3 pts
---    + écart à 5 pts près                 : +2 pts
---    + score exact                        : +5 pts
---    Booster (1 match par journée)        : points x2
---    Pronos bonus : vainqueur du Tournoi  : 10 pts
---                   cuillère de bois      : 5 pts
+--    Score
+--      Bon vainqueur (ou match nul)          : 3 pts
+--      + écart à 5 pts près                  : +2 pts
+--      + score exact                         : +5 pts
+--    Essais : nombre exact, par équipe       : +2 pts
+--    Cartons jaunes : nombre exact, par équipe : +1 pt
+--    Booster (1 seul match dans le Tournoi)  : total du match x2
+--    Pronos bonus : vainqueur du Tournoi     : 10 pts (vue leaderboard)
+--                   cuillère de bois         : 5 pts  (vue leaderboard)
+--  Les essais et cartons rapportent des points même si le vainqueur est faux.
+--  Ils ne comptent que si le joueur les a pronostiqués et l'admin saisis.
 -- ---------------------------------------------------------------------
-create function public.match_score(ph int, pa int, rh int, ra int)
-returns int language sql immutable as $$
+create function public.match_points(
+  ph int, pa int, p_ht int, p_at int, p_hy int, p_ay int,  -- prono : score, essais, cartons
+  rh int, ra int, r_ht int, r_at int, r_hy int, r_ay int   -- réel  : score, essais, cartons
+) returns int language sql immutable as $$
   select case
     when ph is null or pa is null or rh is null or ra is null then null
-    when sign(ph - pa) <> sign(rh - ra) then 0
-    else 3
-      + case when abs((ph - pa) - (rh - ra)) <= 5 then 2 else 0 end
-      + case when ph = rh and pa = ra then 5 else 0 end
+    else
+      -- score
+      case when sign(ph - pa) <> sign(rh - ra) then 0
+           else 3
+             + case when abs((ph - pa) - (rh - ra)) <= 5 then 2 else 0 end
+             + case when ph = rh and pa = ra then 5 else 0 end
+      end
+      -- essais
+      + coalesce((p_ht = r_ht)::int, 0) * 2
+      + coalesce((p_at = r_at)::int, 0) * 2
+      -- cartons jaunes
+      + coalesce((p_hy = r_hy)::int, 0) * 1
+      + coalesce((p_ay = r_ay)::int, 0) * 1
   end
 $$;
 
@@ -63,33 +80,39 @@ create table public.league_secret (
 insert into public.league_secret (invite_code) values ('CHANGE-MOI');
 
 create table public.matches (
-  id         bigint generated always as identity primary key,
-  round      int not null check (round between 1 and 5),
-  kickoff    timestamptz not null,
-  home       public.team not null,
-  away       public.team not null check (away <> home),
-  venue      text,
-  home_score int check (home_score between 0 and 200),
-  away_score int check (away_score between 0 and 200),
+  id          bigint generated always as identity primary key,
+  round       int not null check (round between 1 and 5),
+  kickoff     timestamptz not null,
+  home        public.team not null,
+  away        public.team not null check (away <> home),
+  venue       text,
+  home_score  int check (home_score between 0 and 200),
+  away_score  int check (away_score between 0 and 200),
+  home_tries  int check (home_tries between 0 and 30),
+  away_tries  int check (away_tries between 0 and 30),
+  home_yellows int check (home_yellows between 0 and 15),
+  away_yellows int check (away_yellows between 0 and 15),
   check ((home_score is null) = (away_score is null))
 );
 create index on public.matches (kickoff);
 
 create table public.predictions (
-  user_id    uuid not null references public.profiles (id) on delete cascade,
-  match_id   bigint not null references public.matches (id) on delete cascade,
-  home_score int not null check (home_score between 0 and 200),
-  away_score int not null check (away_score between 0 and 200),
-  updated_at timestamptz not null default now(),
+  user_id      uuid not null references public.profiles (id) on delete cascade,
+  match_id     bigint not null references public.matches (id) on delete cascade,
+  home_score   int not null check (home_score between 0 and 200),
+  away_score   int not null check (away_score between 0 and 200),
+  home_tries   int check (home_tries between 0 and 30),
+  away_tries   int check (away_tries between 0 and 30),
+  home_yellows int check (home_yellows between 0 and 15),
+  away_yellows int check (away_yellows between 0 and 15),
+  updated_at   timestamptz not null default now(),
   primary key (user_id, match_id)
 );
 
--- Un booster par joueur et par journée.
+-- Un seul booster par joueur pour tout le Tournoi.
 create table public.boosters (
-  user_id  uuid not null references public.profiles (id) on delete cascade,
-  round    int not null check (round between 1 and 5),
-  match_id bigint not null references public.matches (id) on delete cascade,
-  primary key (user_id, round)
+  user_id  uuid primary key references public.profiles (id) on delete cascade,
+  match_id bigint not null references public.matches (id) on delete cascade
 );
 
 create table public.bonus_predictions (
@@ -207,7 +230,8 @@ create policy "supprimer son prono avant le coup d'envoi" on public.predictions
     and exists (select 1 from public.matches m where m.id = match_id and m.kickoff > now())
   );
 
--- Boosters : se déplacent librement tant que ni l'ancien ni le nouveau match n'a commencé.
+-- Booster : se déplace librement tant que ni l'ancien ni le nouveau match n'a commencé.
+-- Une fois le match boosté commencé, le booster est consommé.
 create policy "voir boosters" on public.boosters
   for select to authenticated using (
     user_id = auth.uid()
@@ -216,8 +240,7 @@ create policy "voir boosters" on public.boosters
 create policy "poser son booster" on public.boosters
   for insert to authenticated with check (
     user_id = auth.uid()
-    and exists (select 1 from public.matches m
-                where m.id = match_id and m.round = boosters.round and m.kickoff > now())
+    and exists (select 1 from public.matches m where m.id = match_id and m.kickoff > now())
   );
 create policy "déplacer son booster" on public.boosters
   for update to authenticated
@@ -227,8 +250,7 @@ create policy "déplacer son booster" on public.boosters
   )
   with check (
     user_id = auth.uid()
-    and exists (select 1 from public.matches m
-                where m.id = match_id and m.round = boosters.round and m.kickoff > now())
+    and exists (select 1 from public.matches m where m.id = match_id and m.kickoff > now())
   );
 create policy "retirer son booster" on public.boosters
   for delete to authenticated using (
@@ -262,9 +284,16 @@ select
   m.round,
   p.home_score,
   p.away_score,
+  p.home_tries,
+  p.away_tries,
+  p.home_yellows,
+  p.away_yellows,
   (b.match_id is not null) as boosted,
-  public.match_score(p.home_score, p.away_score, m.home_score, m.away_score)
-    * case when b.match_id is not null then 2 else 1 end as points,
+  public.match_points(
+    p.home_score, p.away_score, p.home_tries, p.away_tries, p.home_yellows, p.away_yellows,
+    m.home_score, m.away_score, m.home_tries, m.away_tries, m.home_yellows, m.away_yellows
+  ) * case when b.match_id is not null then 2 else 1 end as points,
+  (m.home_score is not null and sign(p.home_score - p.away_score) = sign(m.home_score - m.away_score)) as good,
   (m.home_score is not null and p.home_score = m.home_score and p.away_score = m.away_score) as exact
 from public.predictions p
 join public.matches m on m.id = p.match_id
@@ -273,9 +302,9 @@ left join public.boosters b on b.user_id = p.user_id and b.match_id = p.match_id
 create view public.leaderboard with (security_invoker = true) as
 with match_pts as (
   select user_id,
-         sum(points)                           as pts,
-         count(*) filter (where points > 0)    as good,
-         count(*) filter (where exact)         as exact
+         sum(points)                     as pts,
+         count(*) filter (where good)    as good,
+         count(*) filter (where exact)   as exact
   from public.prediction_points
   where points is not null
   group by user_id

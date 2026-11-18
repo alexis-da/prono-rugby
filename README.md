@@ -2,12 +2,12 @@
 
 Jeu de pronostics entre potes pour le Tournoi des 6 Nations, dans l'esprit de « Mon Petit Prono ».
 
-- Chacun pronostique le score de chaque match, modifiable jusqu'au coup d'envoi.
+- Chacun pronostique le score de chaque match, et s'il le veut le nombre d'essais et de cartons jaunes de chaque équipe. Tout reste modifiable jusqu'au coup d'envoi.
 - Les pronos des autres deviennent visibles au coup d'envoi.
-- Un **booster ×2** par journée.
+- Un **booster ×2** à placer sur un seul match de tout le Tournoi.
 - Des **pronos bonus** : vainqueur du Tournoi et cuillère de bois.
 - Un classement général et un classement par journée.
-- Une page **Admin** pour saisir les scores. Les points sont calculés automatiquement.
+- Une page **Admin** pour saisir les scores, les essais et les cartons. Les points sont calculés automatiquement.
 - L'inscription demande un **code d'invitation**.
 - Pensée pour le téléphone, avec un mode sombre automatique.
 
@@ -18,11 +18,15 @@ Jeu de pronostics entre potes pour le Tournoi des 6 Nations, dans l'esprit de «
 | Bon vainqueur (ou match nul) | 3 |
 | + écart de points à 5 près | +2 |
 | + score exact | +5 |
-| ⚡ Booster (1 match par journée) | ×2 |
+| Nombre d'essais exact (par équipe) | +2 |
+| Nombre de cartons jaunes exact (par équipe) | +1 |
+| ⚡ Booster (1 seul match dans le Tournoi) | ×2 |
 | Bonus : vainqueur du Tournoi | 10 |
 | Bonus : cuillère de bois | 5 |
 
-Pour modifier le barème, change la fonction `match_score` dans `supabase/schema.sql` (et les points bonus dans la vue `leaderboard`). Mets aussi à jour le texte des règles dans `src/pages/InfosPage.tsx`.
+Les essais et les cartons rapportent des points même si le vainqueur est faux. Le maximum est de 16 pts par match, 32 avec le booster.
+
+Pour modifier le barème, change la fonction `match_points` dans `supabase/schema.sql` (et les points bonus dans la vue `leaderboard`). Mets aussi à jour le texte des règles dans `src/pages/InfosPage.tsx`.
 
 ## Architecture
 
@@ -72,7 +76,7 @@ src/                    l'application
 
 ### Pendant le Tournoi
 
-- Après chaque match, va dans l'onglet **Admin** et saisis le score final. Le classement se met à jour immédiatement.
+- Après chaque match, va dans l'onglet **Admin** et saisis le score final, le nombre d'essais et le nombre de cartons jaunes de chaque équipe. Le classement se met à jour immédiatement.
 - À la fin, saisis le vainqueur et la cuillère de bois dans **Admin** pour attribuer les points bonus.
 - Si un horaire change, utilise le bouton **Horaire** de l'admin.
 

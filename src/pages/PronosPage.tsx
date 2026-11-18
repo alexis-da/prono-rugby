@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import MatchCard from '../components/MatchCard'
-import { niceError, supabase, type Booster, type Match, type PredictionPoints, type Profile } from '../supabase'
-import { formatDate } from '../teams'
+import {
+  niceError, supabase, type Booster, type Match, type PredictionInput, type PredictionPoints, type Profile,
+} from '../supabase'
+import { TEAMS, formatDate } from '../teams'
 import { useNow } from '../useNow'
 
 const ROUNDS = [1, 2, 3, 4, 5]
@@ -56,9 +58,13 @@ export default function PronosPage({ profile }: { profile: Profile }) {
     return groups
   }, [roundMatches])
 
-  const myBooster = boosters.find((b) => b.user_id === profile.id && b.round === round)
+  // Un seul booster pour tout le Tournoi
+  const myBooster = boosters.find((b) => b.user_id === profile.id)
   const myBoosterMatch = matches.find((m) => m.id === myBooster?.match_id)
   const boosterLocked = myBoosterMatch ? new Date(myBoosterMatch.kickoff).getTime() <= now : false
+  const boosterLabel = myBoosterMatch
+    ? `${TEAMS[myBoosterMatch.home].name} – ${TEAMS[myBoosterMatch.away].name} (J${myBoosterMatch.round})`
+    : null
 
   const roundPoints = preds
     .filter((p) => p.user_id === profile.id && p.round === round && p.points != null)
@@ -67,10 +73,10 @@ export default function PronosPage({ profile }: { profile: Profile }) {
     (m) => new Date(m.kickoff).getTime() > now && !preds.some((p) => p.match_id === m.id && p.user_id === profile.id),
   ).length
 
-  async function save(match: Match, home: number, away: number) {
+  async function save(match: Match, p: PredictionInput) {
     const { error } = await supabase
       .from('predictions')
-      .upsert({ user_id: profile.id, match_id: match.id, home_score: home, away_score: away })
+      .upsert({ user_id: profile.id, match_id: match.id, ...p })
     if (error) return niceError(error)
     await load()
     return null
@@ -78,11 +84,12 @@ export default function PronosPage({ profile }: { profile: Profile }) {
 
   async function toggleBoost(match: Match) {
     const isOn = myBooster?.match_id === match.id
+    if (!isOn && boosterLabel && !confirm(`Déplacer ton booster depuis ${boosterLabel} ?`)) return null
     const { error } = isOn
-      ? await supabase.from('boosters').delete().eq('user_id', profile.id).eq('round', match.round)
+      ? await supabase.from('boosters').delete().eq('user_id', profile.id)
       : await supabase
           .from('boosters')
-          .upsert({ user_id: profile.id, round: match.round, match_id: match.id }, { onConflict: 'user_id,round' })
+          .upsert({ user_id: profile.id, match_id: match.id }, { onConflict: 'user_id' })
     if (error) return niceError(error)
     await load()
     return null
@@ -106,6 +113,15 @@ export default function PronosPage({ profile }: { profile: Profile }) {
         <div className="empty">Aucun match pour l’instant. L’admin doit ajouter le calendrier.</div>
       ) : (
         <>
+          <div className={`booster-banner${boosterLocked ? ' used' : myBooster ? ' placed' : ''}`}>
+            ⚡{' '}
+            {boosterLocked
+              ? <>Booster utilisé sur <strong>{boosterLabel}</strong></>
+              : myBooster
+                ? <>Booster placé sur <strong>{boosterLabel}</strong> — déplaçable jusqu’au coup d’envoi</>
+                : <>Booster ×2 disponible : <strong>1 seul pour tout le Tournoi</strong></>}
+          </div>
+
           <div className="round-summary">
             <span>Journée {round}</span>
             <span>
@@ -126,13 +142,11 @@ export default function PronosPage({ profile }: { profile: Profile }) {
                     now={now}
                     mine={preds.find((p) => p.match_id === m.id && p.user_id === profile.id)}
                     boosted={isBoosted}
-                    boostBlocked={
-                      boosterLocked && !isBoosted ? 'Ton booster de la journée est déjà joué' : null
-                    }
+                    boostBlocked={boosterLocked && !isBoosted ? 'Ton booster est déjà utilisé' : null}
                     others={preds
                       .filter((p) => p.match_id === m.id && p.user_id !== profile.id)
                       .map((p) => ({ ...p, pseudo: pseudos[p.user_id] ?? '?' }))}
-                    onSave={(h, a) => save(m, h, a)}
+                    onSave={(p) => save(m, p)}
                     onToggleBoost={() => toggleBoost(m)}
                   />
                 )

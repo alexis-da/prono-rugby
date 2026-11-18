@@ -10,19 +10,33 @@ function toLocalInput(iso: string) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+const RESULT_FIELDS = ['home_score', 'away_score', 'home_tries', 'away_tries', 'home_yellows', 'away_yellows'] as const
+type ResultField = (typeof RESULT_FIELDS)[number]
+
 function ScoreRow({ match, onChanged }: { match: Match; onChanged: () => void }) {
-  const [h, setH] = useState(match.home_score?.toString() ?? '')
-  const [a, setA] = useState(match.away_score?.toString() ?? '')
+  const initial = Object.fromEntries(
+    RESULT_FIELDS.map((f) => [f, match[f]?.toString() ?? '']),
+  ) as Record<ResultField, string>
+  const [form, setForm] = useState(initial)
   const [kickoff, setKickoff] = useState(toLocalInput(match.kickoff))
   const [edit, setEdit] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const field = (f: ResultField, label: string) => (
+    <input
+      inputMode="numeric"
+      aria-label={label}
+      value={form[f]}
+      onChange={(e) => setForm({ ...form, [f]: e.target.value.replace(/\D/g, '').slice(0, 3) })}
+      placeholder="–"
+    />
+  )
+
   async function saveScore() {
-    const both = h !== '' && a !== ''
-    const { error } = await supabase
-      .from('matches')
-      .update({ home_score: both ? Number(h) : null, away_score: both ? Number(a) : null })
-      .eq('id', match.id)
+    const update = Object.fromEntries(
+      RESULT_FIELDS.map((f) => [f, form[f] === '' ? null : Number(form[f])]),
+    )
+    const { error } = await supabase.from('matches').update(update).eq('id', match.id)
     setError(error ? niceError(error) : null)
     if (!error) onChanged()
   }
@@ -46,7 +60,10 @@ function ScoreRow({ match, onChanged }: { match: Match; onChanged: () => void })
     if (!error) onChanged()
   }
 
-  const changed = h !== (match.home_score?.toString() ?? '') || a !== (match.away_score?.toString() ?? '')
+  const changed = RESULT_FIELDS.some((f) => form[f] !== initial[f])
+  const scoreOk = (form.home_score === '') === (form.away_score === '')
+  const home = TEAMS[match.home].name
+  const away = TEAMS[match.away].name
 
   return (
     <div className="admin-row">
@@ -63,16 +80,23 @@ function ScoreRow({ match, onChanged }: { match: Match; onChanged: () => void })
           <button className="btn" onClick={saveKickoff}>OK</button>
         </div>
       )}
-      <div className="admin-score">
+      <div className="admin-grid">
+        <span />
         <TeamBadge team={match.home} size={32} />
-        <input inputMode="numeric" value={h} onChange={(e) => setH(e.target.value.replace(/\D/g, ''))} placeholder="–" />
-        <span>–</span>
-        <input inputMode="numeric" value={a} onChange={(e) => setA(e.target.value.replace(/\D/g, ''))} placeholder="–" />
         <TeamBadge team={match.away} size={32} />
-        <button className="btn primary" disabled={!changed || (h === '') !== (a === '')} onClick={saveScore}>
-          {changed ? 'Valider' : match.home_score !== null ? '✓' : 'Score'}
-        </button>
+        <span>Score</span>
+        {field('home_score', `Score ${home}`)}
+        {field('away_score', `Score ${away}`)}
+        <span>Essais</span>
+        {field('home_tries', `Essais ${home}`)}
+        {field('away_tries', `Essais ${away}`)}
+        <span>Cartons jaunes</span>
+        {field('home_yellows', `Cartons jaunes ${home}`)}
+        {field('away_yellows', `Cartons jaunes ${away}`)}
       </div>
+      <button className="btn primary admin-save" disabled={!changed || !scoreOk} onClick={saveScore}>
+        {changed ? 'Valider le résultat' : match.home_score !== null ? 'Résultat saisi ✓' : 'Valider le résultat'}
+      </button>
       {error && <p className="error">{error}</p>}
     </div>
   )
@@ -122,9 +146,17 @@ export default function AdminPage() {
     <div className="page">
       <div className="card">
         <h2>Scores des matchs</h2>
-        <p className="muted small">Saisis le score final : les points sont calculés immédiatement.</p>
+        <p className="muted small">
+          Saisis le score final, le nombre d’essais et de cartons jaunes : les points sont calculés immédiatement.
+        </p>
         {matches.length === 0 && <p className="muted">Aucun match. Ajoute-les ci-dessous ou importe le calendrier (voir README).</p>}
-        {matches.map((m) => <ScoreRow key={`${m.id}-${m.kickoff}-${m.home_score}-${m.away_score}`} match={m} onChanged={load} />)}
+        {matches.map((m) => (
+          <ScoreRow
+            key={[m.id, m.kickoff, m.home_score, m.away_score, m.home_tries, m.away_tries, m.home_yellows, m.away_yellows].join('-')}
+            match={m}
+            onChanged={load}
+          />
+        ))}
       </div>
 
       <form className="card form" onSubmit={addMatch}>
