@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { niceError, supabase, type LeaderRow, type PredictionPoints, type Profile } from '../supabase'
 
 interface Row {
@@ -7,6 +7,7 @@ interface Row {
   total: number
   good: number
   exact: number
+  live: number
 }
 
 export default function ClassementPage({ profile }: { profile: Profile }) {
@@ -16,24 +17,38 @@ export default function ClassementPage({ profile }: { profile: Profile }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    Promise.all([
+  const [liveCount, setLiveCount] = useState(0)
+
+  const load = useCallback(async () => {
+    const [l, p, m] = await Promise.all([
       supabase.from('leaderboard').select('*'),
       supabase.from('prediction_points').select('*').not('points', 'is', null),
-    ]).then(([l, p]) => {
-      const err = l.error ?? p.error
-      if (err) setError(niceError(err))
-      setGeneral(l.data ?? [])
-      setPreds(p.data ?? [])
-      setLoading(false)
-    })
+      supabase.from('matches').select('id').eq('status', 'live'),
+    ])
+    const err = l.error ?? p.error ?? m.error
+    if (err) setError(niceError(err))
+    setGeneral(l.data ?? [])
+    setPreds(p.data ?? [])
+    setLiveCount(m.data?.length ?? 0)
+    setLoading(false)
   }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  // Classement provisoire : rafraîchi toutes les 30 s pendant un match.
+  useEffect(() => {
+    if (liveCount === 0) return
+    const t = setInterval(load, 30_000)
+    return () => clearInterval(t)
+  }, [liveCount, load])
 
   const rows: Row[] = useMemo(() => {
     let list: Row[]
     if (scope === 'general') {
       list = general.map((g) => ({
-        user_id: g.user_id, pseudo: g.pseudo, total: g.total, good: g.good_results, exact: g.exact_scores,
+        user_id: g.user_id, pseudo: g.pseudo, total: g.total, good: g.good_results, exact: g.exact_scores, live: g.live_points,
       }))
     } else {
       list = general.map((g) => {
@@ -44,6 +59,7 @@ export default function ClassementPage({ profile }: { profile: Profile }) {
           total: mine.reduce((s, p) => s + (p.points ?? 0), 0),
           good: mine.filter((p) => p.good).length,
           exact: mine.filter((p) => p.exact).length,
+          live: mine.filter((p) => p.provisional).reduce((s, p) => s + (p.points ?? 0), 0),
         }
       })
     }
@@ -65,6 +81,13 @@ export default function ClassementPage({ profile }: { profile: Profile }) {
 
       {error && <p className="error">{error}</p>}
 
+      {liveCount > 0 && (
+        <div className="live-banner">
+          <span className="live-dot" aria-hidden /> {liveCount > 1 ? `${liveCount} matchs en cours` : 'Match en cours'} :
+          classement provisoire, mis à jour toutes les 30 s
+        </div>
+      )}
+
       <table className="leaderboard">
         <thead>
           <tr>
@@ -85,7 +108,10 @@ export default function ClassementPage({ profile }: { profile: Profile }) {
                 <td>{r.pseudo}</td>
                 <td>{r.good}</td>
                 <td>{r.exact}</td>
-                <td className="total">{r.total}</td>
+                <td className="total">
+                  {r.total}
+                  {r.live !== 0 && <small className="live-pts">dont {r.live > 0 ? '+' : ''}{r.live} 🔴</small>}
+                </td>
               </tr>
             )
           })}

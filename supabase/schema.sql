@@ -97,6 +97,10 @@ create table public.matches (
   -- jamais écrasé par la synchro). NULL = pas encore de résultat.
   result_source text check (result_source in ('auto', 'manual')),
   espn_event_id text,
+  -- 'scheduled' = à venir, 'live' = en cours (score et points provisoires), 'final' = terminé
+  status      text not null default 'scheduled' check (status in ('scheduled', 'live', 'final')),
+  live_clock  text,          -- ex. "52'" ou "Mi-temps", fourni par la synchro
+  result_updated_at timestamptz,
   check ((home_score is null) = (away_score is null))
 );
 create index on public.matches (kickoff);
@@ -313,7 +317,8 @@ select
     m.home_score, m.away_score, m.home_tries, m.away_tries, m.home_yellows, m.away_yellows
   ) * case when b.match_id is not null then 2 else 1 end as points,
   (m.home_score is not null and sign(p.home_score - p.away_score) = sign(m.home_score - m.away_score)) as good,
-  (m.home_score is not null and p.home_score = m.home_score and p.away_score = m.away_score) as exact
+  (m.home_score is not null and p.home_score = m.home_score and p.away_score = m.away_score) as exact,
+  (m.status = 'live') as provisional
 from public.predictions p
 join public.matches m on m.id = p.match_id
 left join public.boosters b on b.user_id = p.user_id and b.match_id = p.match_id;
@@ -323,7 +328,8 @@ with match_pts as (
   select user_id,
          sum(points)                     as pts,
          count(*) filter (where good)    as good,
-         count(*) filter (where exact)   as exact
+         count(*) filter (where exact)   as exact,
+         sum(points) filter (where provisional) as live_pts
   from public.prediction_points
   where points is not null
   group by user_id
@@ -342,7 +348,8 @@ select
   coalesce(mp.pts, 0)                       as match_points,
   coalesce(bo.pts, 0)                       as bonus_points,
   coalesce(mp.good, 0)                      as good_results,
-  coalesce(mp.exact, 0)                     as exact_scores
+  coalesce(mp.exact, 0)                     as exact_scores,
+  coalesce(mp.live_pts, 0)                  as live_points  -- dont points provisoires (matchs en cours)
 from public.profiles pr
 left join match_pts mp on mp.user_id = pr.id
 left join bonus_pts bo on bo.user_id = pr.id;

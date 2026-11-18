@@ -38,10 +38,21 @@ export default function PronosPage({ profile }: { profile: Profile }) {
     load()
   }, [load])
 
+  // Pendant un match (ou juste après le coup d'envoi), on rafraîchit toutes les 30 s.
+  const hasLive = matches.some((m) => {
+    const k = new Date(m.kickoff).getTime()
+    return m.status === 'live' || (m.status === 'scheduled' && k <= now && k > now - 3 * 3600_000)
+  })
+  useEffect(() => {
+    if (!hasLive) return
+    const t = setInterval(load, 30_000)
+    return () => clearInterval(t)
+  }, [hasLive, load])
+
   // Par défaut : la première journée qui a encore un match à venir.
   useEffect(() => {
     if (round !== null || matches.length === 0) return
-    const next = matches.find((x) => new Date(x.kickoff).getTime() > Date.now())
+    const next = matches.find((x) => x.status === 'live' || new Date(x.kickoff).getTime() > Date.now())
     setRound(next?.round ?? matches[matches.length - 1].round)
   }, [matches, round])
 
@@ -66,9 +77,9 @@ export default function PronosPage({ profile }: { profile: Profile }) {
     ? `${TEAMS[myBoosterMatch.home].name} – ${TEAMS[myBoosterMatch.away].name} (J${myBoosterMatch.round})`
     : null
 
-  const roundPoints = preds
-    .filter((p) => p.user_id === profile.id && p.round === round && p.points != null)
-    .reduce((s, p) => s + (p.points ?? 0), 0)
+  const roundPreds = preds.filter((p) => p.user_id === profile.id && p.round === round && p.points != null)
+  const roundPoints = roundPreds.reduce((s, p) => s + (p.points ?? 0), 0)
+  const roundLive = roundPreds.some((p) => p.provisional)
   const toPlay = roundMatches.filter(
     (m) => new Date(m.kickoff).getTime() > now && !preds.some((p) => p.match_id === m.id && p.user_id === profile.id),
   ).length
@@ -126,7 +137,7 @@ export default function PronosPage({ profile }: { profile: Profile }) {
             <span>Journée {round}</span>
             <span>
               {toPlay > 0 && <span className="pill warn">{toPlay} prono{toPlay > 1 ? 's' : ''} à faire</span>}{' '}
-              <strong>{roundPoints} pts</strong>
+              <strong>{roundPoints} pts{roundLive && <span className="live-dot" title="Points provisoires (match en cours)" />}</strong>
             </span>
           </div>
 

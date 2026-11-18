@@ -1,20 +1,22 @@
 // =====================================================================
 //  Edge Function Supabase : sync-results
-//  Récupère automatiquement les résultats des matchs terminés sur l'API
-//  publique d'ESPN (score, essais, cartons jaunes) et les écrit en base.
+//  Récupère sur l'API publique d'ESPN le score, les essais et les cartons
+//  jaunes des matchs, EN DIRECT pendant le match puis au coup de sifflet final.
 //
+//  - Programmée toutes les minutes (Supabase > Integrations > Cron).
+//  - Pendant un match : status = 'live' (points provisoires) + chrono.
+//  - À la fin : status = 'final'. Les matchs terminés depuis moins de 3 jours
+//    sont revérifiés toutes les 30 min (corrections tardives d'ESPN).
 //  - Ne touche jamais un résultat saisi à la main par l'admin (result_source = 'manual').
-//  - Repasse sur les matchs des 3 derniers jours pour prendre en compte
-//    les corrections tardives d'ESPN.
 //  - Fichier autonome, sans dépendance : il peut être collé tel quel dans
 //    l'éditeur d'Edge Functions du tableau de bord Supabase.
 // =====================================================================
 
 const ESPN = 'https://site.api.espn.com/apis/site/v2/sports/rugby/180659' // 180659 = Six Nations
 const ESPN_TEAMS: Record<string, string> = { FRA: 'FRA', ENG: 'ENG', IRE: 'IRL', IRL: 'IRL', SCO: 'SCO', WAL: 'WAL', ITA: 'ITA' }
-const WAIT_AFTER_KICKOFF_MIN = 100 // on ne cherche le résultat qu'1h40 après le coup d'envoi
 const LOOKBACK_DAYS = 3
-const MIN_INTERVAL_MS = 60_000 // anti-spam : au plus une synchro par minute
+const RECHECK_FINAL_MIN = 30 // revérifie un match terminé (auto) au plus toutes les 30 min
+const MIN_INTERVAL_MS = 20_000 // anti-spam : au plus une synchro toutes les 20 s
 
 type Fetch = typeof fetch
 
@@ -23,7 +25,9 @@ interface DbMatch {
   kickoff: string
   home: string
   away: string
+  status: 'scheduled' | 'live' | 'final'
   result_source: 'auto' | 'manual' | null
+  result_updated_at: string | null
 }
 
 export interface SyncOptions {
@@ -67,6 +71,13 @@ const ymd = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, '')
 // deno-lint-ignore no-explicit-any
 type Json = any
 
+/** Texte du chrono affiché dans l'appli. */
+export function clockLabel(status: Json): string {
+  const name: string = status?.type?.name ?? ''
+  if (name.includes('HALFTIME')) return 'Mi-temps'
+  return status?.displayClock || status?.type?.shortDetail || 'En cours'
+}
+
 export async function syncResults(opts: SyncOptions): Promise<SyncResult> {
   const fetchFn = opts.fetchFn ?? fetch
   const now = opts.now ?? new Date()
@@ -75,15 +86,23 @@ export async function syncResults(opts: SyncOptions): Promise<SyncResult> {
 
   const [status] = await db.get<{ last_run_at: string | null }[]>('sync_status?select=last_run_at&id=eq.1')
   if (!opts.force && status?.last_run_at && Date.now() - new Date(status.last_run_at).getTime() < MIN_INTERVAL_MS) {
-    return { skipped: true, checked: 0, updated: 0, messages: ['Synchro déjà lancée il y a moins d’une minute'] }
+    return { skipped: true, checked: 0, updated: 0, messages: ['Synchro déjà lancée il y a quelques secondes'] }
   }
 
   const from = new Date(now.getTime() - LOOKBACK_DAYS * 86_400_000).toISOString()
-  const to = new Date(now.getTime() - WAIT_AFTER_KICKOFF_MIN * 60_000).toISOString()
   const matches = await db.get<DbMatch[]>(
-    `matches?select=id,kickoff,home,away,result_source&kickoff=gte.${encodeURIComponent(from)}&kickoff=lte.${encodeURIComponent(to)}&order=kickoff.asc`,
+    `matches?select=id,kickoff,home,away,status,result_source,result_updated_at` +
+      `&kickoff=gte.${encodeURIComponent(from)}&kickoff=lte.${encodeURIComponent(now.toISOString())}&order=kickoff.asc`,
   )
-  const todo = matches.filter((m) => m.result_source !== 'manual')
+  const recheckBefore = now.getTime() - RECHECK_FINAL_MIN * 60_000
+  const todo = matches.filter(
+    (m) =>
+      m.result_source !== 'manual' &&
+      (m.status !== 'final' ||
+        m.result_source === null ||
+        !m.result_updated_at ||
+        new Date(m.result_updated_at).getTime() < recheckBefore),
+  )
 
   const espn = async (path: string): Promise<Json> => {
     const r = await fetchFn(`${ESPN}/${path}`)
@@ -111,22 +130,37 @@ export async function syncResults(opts: SyncOptions): Promise<SyncResult> {
         if (event) break
       }
       if (!event) { messages.push(`${label} : introuvable chez ESPN`); continue }
-      if (!event.status?.type?.completed) { messages.push(`${label} : pas encore terminé`); continue }
+
+      const type = event.status?.type ?? {}
+      const finished = type.completed === true
+      const live = type.state === 'in'
+      if (!finished && !live) {
+        messages.push(`${label} : ${type.state === 'post' ? `pas de résultat (${type.description ?? type.name})` : 'pas encore commencé'}`)
+        continue
+      }
 
       const score: Record<string, number> = {}
       for (const c of event.competitions[0].competitors) score[ESPN_TEAMS[c.team.abbreviation]] = Number(c.score)
+      if (!Number.isInteger(score[m.home]) || !Number.isInteger(score[m.away])) {
+        messages.push(`${label} : score illisible`)
+        continue
+      }
 
-      const summary = await espn(`summary?event=${event.id}`)
+      // Stats détaillées (essais, cartons) : peuvent manquer en tout début de match.
       const stats: Record<string, Record<string, string>> = {}
-      for (const t of summary.boxscore?.teams ?? []) {
-        const code = ESPN_TEAMS[t.team.abbreviation]
-        stats[code] = Object.fromEntries(
-          (t.statistics?.[0]?.stats ?? []).map((s: Json) => [s.name, s.displayValue]),
-        )
+      try {
+        const summary = await espn(`summary?event=${event.id}`)
+        for (const t of summary.boxscore?.teams ?? []) {
+          stats[ESPN_TEAMS[t.team.abbreviation]] = Object.fromEntries(
+            (t.statistics?.[0]?.stats ?? []).map((s: Json) => [s.name, s.displayValue]),
+          )
+        }
+      } catch {
+        // on garde au moins le score
       }
       const stat = (team: string, name: string) => {
         const v = Number(stats[team]?.[name])
-        return Number.isInteger(v) && v >= 0 ? v : null
+        return stats[team]?.[name] != null && Number.isInteger(v) && v >= 0 ? v : null
       }
       let homeTries = stat(m.home, 'tries')
       let awayTries = stat(m.away, 'tries')
@@ -134,10 +168,7 @@ export async function syncResults(opts: SyncOptions): Promise<SyncResult> {
       if (homeTries !== null && homeTries * 5 > score[m.home]) homeTries = null
       if (awayTries !== null && awayTries * 5 > score[m.away]) awayTries = null
 
-      if (!Number.isInteger(score[m.home]) || !Number.isInteger(score[m.away])) {
-        messages.push(`${label} : score illisible`)
-        continue
-      }
+      const clock = live ? clockLabel(event.status) : null
       // Le filtre or=() protège une saisie manuelle faite pendant la synchro.
       await db.patch(`matches?id=eq.${m.id}&or=(result_source.is.null,result_source.eq.auto)`, {
         home_score: score[m.home],
@@ -146,11 +177,17 @@ export async function syncResults(opts: SyncOptions): Promise<SyncResult> {
         away_tries: awayTries,
         home_yellows: stat(m.home, 'yellowCards'),
         away_yellows: stat(m.away, 'yellowCards'),
+        status: finished ? 'final' : 'live',
+        live_clock: clock,
         result_source: 'auto',
+        result_updated_at: now.toISOString(),
         espn_event_id: String(event.id),
       })
       updated++
-      messages.push(`${label} : ${score[m.home]}–${score[m.away]} (essais ${homeTries ?? '?'}–${awayTries ?? '?'}, cartons ${stat(m.home, 'yellowCards') ?? '?'}–${stat(m.away, 'yellowCards') ?? '?'})`)
+      messages.push(
+        `${label}${live ? ` (en direct, ${clock})` : ''} : ${score[m.home]}–${score[m.away]}` +
+          ` (essais ${homeTries ?? '?'}–${awayTries ?? '?'}, cartons ${stat(m.home, 'yellowCards') ?? '?'}–${stat(m.away, 'yellowCards') ?? '?'})`,
+      )
     } catch (e) {
       messages.push(`${label} : erreur ${(e as Error).message}`)
     }

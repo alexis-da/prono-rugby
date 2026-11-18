@@ -7,7 +7,7 @@ Jeu de pronostics entre potes pour le Tournoi des 6 Nations, dans l'esprit de «
 - Un **booster ×2** à placer sur un seul match de tout le Tournoi.
 - Des **pronos bonus** : vainqueur du Tournoi et cuillère de bois.
 - Un classement général et un classement par journée.
-- **Les résultats arrivent tout seuls** : score, essais et cartons sont récupérés sur ESPN toutes les 15 minutes. L'admin peut toujours corriger à la main, et sa saisie est prioritaire.
+- **Score en direct** : pendant les matchs, le score, les essais, les cartons et les points (provisoires) s'affichent en direct, avec un classement provisoire. Tout devient définitif au coup de sifflet final, et rien n'est à saisir. L'admin peut toujours corriger à la main, et sa saisie est prioritaire.
 - Une page **Admin** pour saisir ou corriger les résultats. Les points sont calculés automatiquement.
 - L'inscription demande un **code d'invitation**.
 - Pensée pour le téléphone, avec un mode sombre automatique.
@@ -38,6 +38,7 @@ Pour modifier le barème, change la fonction `match_points` dans `supabase/schem
 ```
 supabase/schema.sql     tables, règles de sécurité, calcul des points
 supabase/seed_2027.sql  calendrier du Tournoi 2027 (15 matchs)
+supabase/migrations/    mises à jour d'une base déjà installée
 supabase/functions/sync-results/index.ts
                         récupération automatique des résultats (ESPN)
 src/                    l'application
@@ -70,19 +71,19 @@ src/                    l'application
 
 ### 3. Résultats automatiques (5 minutes)
 
-La fonction `sync-results` interroge l'API publique d'ESPN (gratuite, sans clé). Pour chaque match terminé depuis moins de 3 jours, elle récupère le score, les essais et les cartons jaunes, puis les écrit en base. Elle ne touche jamais un résultat que l'admin a saisi à la main.
+La fonction `sync-results` interroge l'API publique d'ESPN (gratuite, sans clé) **chaque minute**. Elle suit les matchs en direct : score, essais, cartons jaunes et chrono, avec des points provisoires. Au coup de sifflet final, elle enregistre le résultat définitif. Elle ne touche jamais un résultat que l'admin a saisi à la main.
 
 1. Dans Supabase, va dans **Edge Functions > Deploy a new function > Via Editor**.
 2. Nomme-la exactement `sync-results`, remplace le code d'exemple par le contenu de `supabase/functions/sync-results/index.ts`, puis clique sur **Deploy**.
 3. Dans les réglages de la fonction (**Details**), désactive **Verify JWT** (« Enforce JWT verification »). La fonction ne fait que lire des résultats publics, et elle refuse de tourner plus d'une fois par minute.
-4. Programme-la toutes les 15 minutes : **Integrations > Cron**. Active l'intégration si besoin, puis **Create job** :
+4. Programme-la chaque minute : **Integrations > Cron**. Active l'intégration si besoin, puis **Create job** :
    - Nom : `sync-results`
-   - Planning : `*/15 * * * *`
+   - Planning : `* * * * *` (chaque minute)
    - Type : **Supabase Edge Function**, fonction `sync-results`, méthode `POST`
 
    Si ton tableau de bord ne propose pas ce type, tu peux faire la même chose en SQL (**SQL Editor**). Il faut d'abord activer les extensions `pg_cron` et `pg_net` dans **Database > Extensions**, et remplacer `TON-PROJET` :
    ```sql
-   select cron.schedule('sync-results', '*/15 * * * *', $$
+   select cron.schedule('sync-results', '* * * * *', $$
      select net.http_post(url := 'https://TON-PROJET.supabase.co/functions/v1/sync-results')
    $$);
    ```
@@ -101,12 +102,16 @@ La fonction `sync-results` interroge l'API publique d'ESPN (gratuite, sans clé)
 
 ### Pendant le Tournoi
 
-- Les résultats arrivent tout seuls environ 1h40 après le coup d'envoi. Le classement se met alors à jour.
+- Les scores s'affichent en direct pendant les matchs, et le classement provisoire se met à jour toutes les 30 secondes. Tout devient définitif au coup de sifflet final.
 - Si un résultat manque, va dans l'onglet **Admin** pour le saisir à la main (score, essais et cartons jaunes de chaque équipe), ou clique sur **Synchroniser maintenant**.
 - À la fin, saisis le vainqueur et la cuillère de bois dans **Admin** pour attribuer les points bonus.
 - Si un horaire change, utilise le bouton **Horaire** de l'admin.
 
 > ℹ️ Un projet Supabase gratuit **se met en pause après 7 jours sans activité**. Si l'appli ne répond plus avant le Tournoi, clique sur **Restore** dans le tableau de bord Supabase. Pendant le Tournoi, l'activité suffit à le garder éveillé.
+
+## Mettre à jour une installation existante
+
+Quand une nouvelle version ajoute un fichier dans `supabase/migrations/`, lance-le **une fois** dans **SQL Editor**. Les migrations ne suppriment aucune donnée, contrairement à `schema.sql`. Si la fonction `sync-results` a changé, recolle son code dans l'éditeur Supabase et redéploie-la.
 
 ## Développement local
 

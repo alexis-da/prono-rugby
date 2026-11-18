@@ -36,8 +36,11 @@ function ScoreRow({ match, onChanged }: { match: Match; onChanged: () => void })
     const update: Record<string, number | string | null> = Object.fromEntries(
       RESULT_FIELDS.map((f) => [f, form[f] === '' ? null : Number(form[f])]),
     )
-    // Saisie manuelle = prioritaire sur la synchro ; tout vider = la synchro reprend la main.
-    update.result_source = RESULT_FIELDS.every((f) => form[f] === '') ? null : 'manual'
+    // Saisie manuelle = résultat final, prioritaire sur la synchro ; tout vider = la synchro reprend la main.
+    const empty = RESULT_FIELDS.every((f) => form[f] === '')
+    update.result_source = empty ? null : 'manual'
+    update.status = empty ? 'scheduled' : 'final'
+    update.live_clock = null
     const { error } = await supabase.from('matches').update(update).eq('id', match.id)
     setError(error ? niceError(error) : null)
     if (!error) onChanged()
@@ -103,6 +106,7 @@ function ScoreRow({ match, onChanged }: { match: Match; onChanged: () => void })
         {field('away_yellows', `Cartons jaunes ${away}`)}
       </div>
       <div className="admin-source">
+        {match.status === 'live' && <span className="pill live"><span className="live-dot" aria-hidden /> En direct · {match.live_clock}</span>}
         {match.result_source === 'auto' && <span className="pill open">Auto · ESPN</span>}
         {match.result_source === 'manual' && (
           <>
@@ -179,8 +183,9 @@ export default function AdminPage() {
       <div className="card">
         <h2>Synchro automatique</h2>
         <p className="muted small">
-          Les résultats (score, essais, cartons) sont récupérés sur ESPN toutes les 15 minutes, environ 1h40 après le
-          coup d’envoi. Un résultat saisi à la main n’est jamais écrasé.
+          Le score, les essais et les cartons sont récupérés sur ESPN chaque minute, en direct pendant les matchs
+          (points provisoires) puis au coup de sifflet final. Un résultat saisi à la main n’est jamais écrasé et
+          compte comme résultat final.
         </p>
         <p className="small">
           {sync?.last_run_at
@@ -200,7 +205,7 @@ export default function AdminPage() {
         {matches.length === 0 && <p className="muted">Aucun match. Ajoute-les ci-dessous ou importe le calendrier (voir README).</p>}
         {matches.map((m) => (
           <ScoreRow
-            key={[m.id, m.kickoff, m.home_score, m.away_score, m.home_tries, m.away_tries, m.home_yellows, m.away_yellows, m.result_source].join('-')}
+            key={[m.id, m.kickoff, m.home_score, m.away_score, m.home_tries, m.away_tries, m.home_yellows, m.away_yellows, m.result_source, m.status].join('-')}
             match={m}
             onChanged={load}
           />

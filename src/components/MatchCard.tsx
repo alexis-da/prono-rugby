@@ -29,7 +29,8 @@ const pair = (a: number | null | undefined, b: number | null | undefined) =>
 
 export default function MatchCard({ match, now, mine, boosted, boostBlocked, others, onSave, onToggleBoost }: Props) {
   const started = new Date(match.kickoff).getTime() <= now
-  const finished = match.home_score !== null
+  const finished = match.status === 'final'
+  const live = match.status === 'live'
   const [form, setForm] = useState<Form>(() => toForm(mine))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -76,6 +77,8 @@ export default function MatchCard({ match, now, mine, boosted, boostBlocked, oth
         <span>{formatTime(match.kickoff)}{match.venue ? ` · ${match.venue}` : ''}</span>
         {finished ? (
           <span className="pill done">Terminé</span>
+        ) : live ? (
+          <span className="pill live"><span className="live-dot" aria-hidden /> En direct · {match.live_clock ?? ''}</span>
         ) : started ? (
           <span className="pill live">En cours</span>
         ) : (
@@ -90,8 +93,8 @@ export default function MatchCard({ match, now, mine, boosted, boostBlocked, oth
         </div>
         <div className="score-zone">
           {started ? (
-            finished ? (
-              <div className="final-score">{match.home_score} <span>–</span> {match.away_score}</div>
+            finished || live ? (
+              <div className={`final-score${live ? ' is-live' : ''}`}>{match.home_score} <span>–</span> {match.away_score}</div>
             ) : (
               <div className="final-score pending">vs</div>
             )
@@ -140,29 +143,30 @@ export default function MatchCard({ match, now, mine, boosted, boostBlocked, oth
         <div className="recap">
           <table>
             <thead>
-              <tr><th /><th>Mon prono{boosted ? ' ⚡' : ''}</th>{finished && <th>Réel</th>}</tr>
+              <tr><th /><th>Mon prono{boosted ? ' ⚡' : ''}</th>{(finished || live) && <th>{live ? 'En direct' : 'Réel'}</th>}</tr>
             </thead>
             <tbody>
               <tr>
                 <td>Score</td>
                 <td>{mine ? pair(mine.home_score, mine.away_score) : <em>aucun</em>}</td>
-                {finished && <td>{pair(match.home_score, match.away_score)}</td>}
+                {(finished || live) && <td>{pair(match.home_score, match.away_score)}</td>}
               </tr>
               <tr>
                 <td>Essais</td>
                 <td>{pair(mine?.home_tries, mine?.away_tries)}</td>
-                {finished && <td>{pair(match.home_tries, match.away_tries)}</td>}
+                {(finished || live) && <td>{pair(match.home_tries, match.away_tries)}</td>}
               </tr>
               <tr>
                 <td>Cartons jaunes</td>
                 <td>{pair(mine?.home_yellows, mine?.away_yellows)}</td>
-                {finished && <td>{pair(match.home_yellows, match.away_yellows)}</td>}
+                {(finished || live) && <td>{pair(match.home_yellows, match.away_yellows)}</td>}
               </tr>
             </tbody>
           </table>
           {mine?.points != null && (
-            <span className={`points${mine.points > 0 ? ' plus' : ''}`}>
+            <span className={`points${mine.points > 0 ? ' plus' : ''}${live ? ' provisional' : ''}`}>
               {mine.points > 0 ? `+${mine.points}` : '0'} pt{mine.points > 1 ? 's' : ''}
+              {live && <small>provisoire</small>}
             </span>
           )}
         </div>

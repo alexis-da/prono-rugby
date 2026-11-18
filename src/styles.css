@@ -265,3 +265,20 @@ input:focus, select:focus { outline: 2px solid var(--brand); outline-offset: 1px
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 code { background: var(--surface-2); padding: 0.1rem 0.3rem; border-radius: 4px; }
+
+/* ---------- Direct ---------- */
+.live-dot {
+  display: inline-block; width: 8px; height: 8px; margin: 0 0.15rem 0.1rem 0.3rem;
+  border-radius: 50%; background: #e11d48; vertical-align: middle;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.pill.live .live-dot { margin-left: 0; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+.final-score.is-live { color: #e11d48; }
+@media (prefers-color-scheme: dark) { .final-score.is-live { color: #fb7185; } }
+.recap .points { white-space: nowrap; text-align: right; }
+.points small { display: block; font-size: 0.7rem; font-weight: 600; text-align: right; }
+.points.provisional { color: var(--live); }
+.live-banner { font-size: 0.88rem; padding: 0.55rem 0.75rem; border-radius: 10px; background: var(--danger-soft); color: var(--live); font-weight: 600; }
+.live-pts { display: block; font-size: 0.7rem; font-weight: 600; color: var(--live); white-space: nowrap; }

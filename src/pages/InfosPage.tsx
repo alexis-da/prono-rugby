@@ -38,7 +38,9 @@ export default function InfosPage({ profile, onProfileChange }: { profile: Profi
           16 pts (32 boosté).
         </p>
         <p className="muted small">
-          Les pronos des autres joueurs deviennent visibles au coup d’envoi. Le booster peut être déplacé tant que le
+          Pendant les matchs, le score, les essais, les cartons et tes points s’affichent en direct (provisoires,
+          mis à jour toutes les 30 s) ; ils deviennent définitifs au coup de sifflet final. Les pronos des autres
+          joueurs deviennent visibles au coup d’envoi. Le booster peut être déplacé tant que le
           match boosté n’a pas commencé ; ensuite il est consommé. En cas d’égalité au classement : nombre de scores
           exacts, puis de bons vainqueurs.
         </p>

@@ -30,6 +30,9 @@ export interface Match {
   away_yellows: number | null
   result_source: 'auto' | 'manual' | null
   espn_event_id: string | null
+  status: 'scheduled' | 'live' | 'final'
+  live_clock: string | null
+  result_updated_at: string | null
 }
 
 export interface SyncStatus {
@@ -52,6 +55,8 @@ export interface PredictionPoints {
   points: number | null
   good: boolean
   exact: boolean
+  /** true = match en cours, points provisoires */
+  provisional: boolean
 }
 
 export interface Booster {
@@ -77,6 +82,8 @@ export interface LeaderRow {
   bonus_points: number
   good_results: number
   exact_scores: number
+  /** part des points venant de matchs en cours (provisoires) */
+  live_points: number
 }
 
 /** Transforme une erreur Supabase/Postgres en message lisible. */
